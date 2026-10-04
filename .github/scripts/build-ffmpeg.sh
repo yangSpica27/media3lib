@@ -2,32 +2,31 @@
 set -eu
 
 FFMPEG_MODULE_PATH="${MEDIA3_PATH}/libraries/decoder_ffmpeg/src/main"
-GD_PATH="${MEDIA3_PATH}/libraries/decoder_ffmpeg/build.gradle"
+GD_PATH="${MEDIA3_PATH}/libraries/decoder_ffmpeg/build.gradle.kts"
 
-echo "
-android {
-    namespace 'androidx.media3.decoder.ffmpeg'
-
-    publishing {
-        singleVariant('release') {
-            withSourcesJar()
-        }
-    }
-}
-ext {
-     releaseArtifactId = 'media3-decode-ffmpeg'
-     releaseName = 'Media3 ffmpeg module'
-     }
-     apply from: '../../publish.gradle'
-">>"${GD_PATH}"
+# Media3 1.11+ 改用 Kotlin DSL，发布由 media3.publish 插件负责（产物 androidx.media3:media3-decoder-ffmpeg）
+PUBLISH_PLUGIN='id("media3.publish")'
+grep -qF "${PUBLISH_PLUGIN}" "${GD_PATH}" ||
+    sed -i "s/id(\"media3.android-library\")/id(\"media3.android-library\"); ${PUBLISH_PLUGIN}/" "${GD_PATH}"
+if ! grep -qF "${PUBLISH_PLUGIN}" "${GD_PATH}"
+then
+    echo "Failed to enable media3.publish in ${GD_PATH}"
+    exit 1
+fi
 
 #cat "${GD_PATH}"
+
+# 静态库符号默认对外导出，会成为 --gc-sections 的根；隐藏后未用到的代码才能被裁掉
+CMAKE_PATH="${FFMPEG_MODULE_PATH}/jni/CMakeLists.txt"
+EXCLUDE_LIBS_OPTION='target_link_options(ffmpegJNI PRIVATE "-Wl,--exclude-libs,ALL")'
+grep -qF "${EXCLUDE_LIBS_OPTION}" "${CMAKE_PATH}" || echo "${EXCLUDE_LIBS_OPTION}" >> "${CMAKE_PATH}"
 
 echo "Build FFmpeg"
 echo $ANDROID_NDK_HOME
 echo $NDK_PATH
 ANDROID_ABI=21
 HOST_PLATFORM="linux-x86_64"
+FFMPEG_VERSION="n8.1.3"
 ENABLED_DECODERS=(vorbis opus flac alac pcm_mulaw pcm_alaw mp3 aac ac3 eac3 dca mlp truehd)
 
 
@@ -42,7 +41,8 @@ cd "${FFMPEG_MODULE_PATH}/jni"
 
 rm -rf ffmpeg
 
-git clone --depth=1 -b release/6.0  git://source.ffmpeg.org/ffmpeg
+echo "FFmpeg version is ${FFMPEG_VERSION}"
+git clone --depth=1 -b "${FFMPEG_VERSION}" https://git.ffmpeg.org/ffmpeg.git ffmpeg
 cd ffmpeg
 FFMPEG_PATH="$(pwd)"
 pwd
@@ -61,13 +61,14 @@ COMMON_OPTIONS="
     --disable-avdevice
     --disable-avformat
     --disable-swscale
-    --disable-postproc
     --disable-avfilter
     --disable-symver
     --enable-swresample
     --extra-ldexeflags=-pie
     --disable-v4l2-m2m
     --disable-vulkan
+    --extra-cflags=-ffunction-sections
+    --extra-cflags=-fdata-sections
     "
 TOOLCHAIN_PREFIX="${NDK_PATH}/toolchains/llvm/prebuilt/${HOST_PLATFORM}/bin"
 for decoder in "${ENABLED_DECODERS[@]}"
